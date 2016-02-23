@@ -1,0 +1,210 @@
+$Id: //devel/tools/main/nbtscan/README#2 $
+
+Written by :	Stephen J. Friedl
+		steve@unixwiz.net
+
+	*** NOTE ***
+
+	These notes are pretty old, with the only thing being really
+	current is the first section on building the code.
+
+	*** NOTE ***
+	
+BUILDING THE CODE
+-----------------
+
+This program is part of a much large suite of tools that is much
+too large to describe, but I've managed to use my source code
+control system (Perforce) to put all the required files in this
+directory. There will, however, be lots of references to things
+that aren't here, especially in "penlib.h", but they aren't
+required.
+
+This program requires GNU make on all platforms, and the Windows
+version is built *exclusively* with the command line compiler
+(tested with MSVC 6). I don't use the visual tools, sorry.
+
+OVERVIEW
+--------
+
+This is an NBTSTAT-like program for UNIX that is roughly modelled after
+the NT tool of the same name, and is used for scanning a subnet: it was
+designed for use in penetration testing.  It was written from scratch
+based on the RFCs (1002) plus a stint staring at my network sniffer.
+
+The NT nbtstat sends an NBTSTAT query to the remote end end, and this
+enumerates all the NETBIOS names and their types.  This is an example
+output of NBTSTAT from NT:
+
+	C>nbtstat -A 10.1.1.3
+
+	       NetBIOS Remote Machine Name Table
+
+	   Name               Type         Status
+	--------------------------------------------
+	CPUNAME        <1F>  UNIQUE      Registered
+	CPUNAME        <00>  UNIQUE      Registered
+	CPUNAME        <20>  UNIQUE      Registered
+	MYDOMAIN       <00>  GROUP       Registered
+	MYDOMAIN       <1C>  GROUP       Registered
+	MYDOMAIN       <1B>  UNIQUE      Registered
+	MYDOMAIN       <1E>  GROUP       Registered
+	MYDOMAIN       <03>  UNIQUE      Registered
+	CPUNAME        <1D>  UNIQUE      Registered
+	..__MSBROWSE__.<01>  GROUP       Registered
+	USERNAME       <03>  UNIQUE      Registered
+
+	MAC Address = 00-11-22-33-44-55
+
+The name is up to 15 chars, and the hex digits <XX> represent
+the class of the resource record. These have meanings like <06>
+for the RAS service and <20> for the File Sharing service, and
+unfortunately I've not found a comprehensive list of these.
+
+The type also includes whether it's unique throughout the
+enterprise or or not, and usually the MAC address as well.
+
+This program is designed to work largely the same way, but it's
+for UNIX instead of NT. We also have an NT port
+
+SOURCE PORTS NUMBERS
+--------------------
+
+NETBIOS nameservice runs on UDP port 137, and traditionally this has
+been the source and destination port number on a real network. To use
+this port on a UNIX system requires that this be root, so by default
+we instead use a more or less random high-numbered port.
+
+This port is fixed (5749) so that you can configure your firewall to
+permit this traffic without opening up NETBIOS in general:
+
+	permit inbound  udp 137 -> 5749
+	permit outbound udp 5749 -> 137
+
+It's possible to pick any port as the source, though if 137 is already
+in use (any NT system, or Samba under UNIX/Linux) you won't get very
+far. We've heard reports that setting the source port to "53" (DNS)
+gets under Black Ice Defender's radar and provokes a response.
+
+NOTE: we believe that older platforms (Win95) sometimes send their
+responses to port 137 regardless where the originally query came from.
+This smells like a bug to me but is nevertheless a fact of life. This
+means that you really need to be on a non-Samba Linux box to do this
+properly and fully.
+
+RUNNING THE PROGRAM
+-------------------
+
+nbtscan requires a target range of machines, and this can be specified
+in several ways:
+
+	direct IP address		10.1.1.12
+	subnet				10.1.1.0/24
+	range of nodes			10.1.1.12-45,49,53,100-120
+
+The first two work with domain names also, but the range mode only works
+with numeric IP addresses. When scanning subnet (the /## notation), the
+address itself is considered a *part* of the block to be scanned, not the
+*start* of same. This means that if you scan www.whitehouse.gov/24 you
+get the whole block. You can list as many targets as you like, and the
+subnet listing is limited to /16 subnets.
+
+By default, the program creates a one-line summary of all the machines
+it finds with IP address, domain\computer name, and a summary of the
+available services it finds:
+
+	$ nbtscan 10.1.1.1-255
+
+	10.1.1.1        MYDOMAIN\XYZ                     SHARING
+	10.1.1.6        MYDOMAIN\PDC                     SHARING
+	10.1.1.8        MYDOMAIN\W95MIS                 
+	10.1.1.5        MYDOMAIN\NTACCT                  SHARING
+	10.1.1.3        MYDOMAIN\SERVER                  SHARING IIS
+	10.1.1.13       MYDOMAIN\EXCH1                   SHARING EXCHANGE
+	10.1.1.15       MYDOMAIN\CAT-NT                  SHARING
+	10.1.1.16       MYDOMAIN\TCSSRV                  SHARING
+
+When the "-f" is provided, the full NBTSTAT information is provided
+as received from the other end:
+
+	$ ./nbtscan -f 10.1.1.1-255
+
+	10.1.1.5        MYDOMAIN\NTACCT                  SHARING
+	  NTACCT         <00> UNIQUE Workstation Service
+	  MYDOMAIN       <00> GROUP  Domain Name
+	  MYDOMAIN       <1c> GROUP  Domain Controller
+	  NTACCT         <20> UNIQUE File Server Service
+	  MYDOMAIN       <1e> GROUP  Browser Service Elections
+	  NTACCT         <03> UNIQUE Messenger Service<3>
+	  00:00:00:00:00:00   ETHER
+
+	... and so on
+
+Note that the responses are displayed in the same order as received
+from the network.
+
+Full option summary:
+
+-p portno       bind to the given UDP port number. This is used as the source
+		port for all queries, and the default is the standard 137.
+		However, if you have a packet-filtering firewall that doesn't
+		permit inbound traffic to port 137, set this to something else
+		that you do permit: then the responses will return to the
+		(secret) high-numbered port and pass through.
+	
+-v              verbose: turn on more debugging info. Use twice for
+		more, though some of this is internal debugging only.
+	
+-T secs         timeout when no activity is seen for the given
+		number of seconds. Default = about 5 seconds.
+	
+-b              enable broadcast mode. *NOT IMPLEMENTED*.
+	
+-w msecs        To keep from flooding a link with queries, we can wait
+		for the given number of milliseconds after every write
+		to allow us to pace things a bit. Default = 10 msecs,
+		should be turned lower if all is on the local Ethernet.
+	
+-f              show full NBTSTAT information, else summary only
+	
+-m              include MAC address in summary listing (always 
+		provided in full listing).
+
+-T ##		try the given number of tries (default=1). Once a
+		response is received from a remote, we won't query
+		them again.
+
+SECURITY
+--------
+
+Some of us really like running with source port 137 all the time, and
+this means root. On my system I have nbtscan setuid root just for this
+purpose, but we all know that setuid is scary. I believe I have taken
+care of all the possible overflows, but it's not at all a sure thing
+so do this only with caution.
+
+FUTURE DIRECTIONS AND UNFINISHED BUSINESS
+-----------------------------------------
+
+[*] We'd sure like to build in a lot more knowledge of what's going on
+    with the NETBIOS protocol so we do less magic with hand-coding of the
+    name request packet. This should all be documented well for others.
+
+[*] This code should probably be built into NMAP for protocol-specific
+    analysis.
+
+[*] it is possible that some kind of broadcast mode would be much more
+    efficient: the RFC hints that this is possible. We should investigate
+    this.  
+
+[*] should properly note ICMP responses so we can identify machines that
+    are up but not responding, and possibly resend if we hear nothing.
+    UDP does get lost now and then.
+
+[*] The write-delay should be built into the select loop so it's more
+    portable. We hate doing sleeps.
+
+[*] Bandwidth-limit mode would be more useful than the write-delay that we
+    have now. Saying that you have (say) a 56k frame connection should
+    cause nbtscan to limit its output to not overwhelm that link. Note that
+    responses are typically much larger than the queries.
